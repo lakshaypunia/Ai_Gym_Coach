@@ -66,15 +66,22 @@ User tested in a real browser and reported it working but not smooth enough. Two
 - ✅ `TECHNICAL_DETAILS.md` updated (§1, §5, §6, §10, §11, §12) to describe One Euro + the downscale instead of the old EMA/full-res approach.
 - ✅ Verified: `npx vitest run` (19/19 passing), `tsc --noEmit`, `eslint .`, `next build` all clean.
 
-**Still needs a real browser check:** whether this actually *feels* smoother is unverified from this session — worth trying `/workout/bicep_curl` again and reporting back.
+**Confirmed by user (2026-09-13):** tested live, "it is working good" — smoothness pass accepted, no further tuning requested.
 
-## Phase 4 — Multi-exercise + Feedback + Voice Cues ⬜
+## Phase 4 — Multi-exercise + Feedback + Voice Cues ✅ (done 2026-09-13)
 
-- ⬜ Add `squat` and `pushup` configs
-- ⬜ `lib/exercises/feedback.ts` — posture rule engine
-- ⬜ `components/hud/FormFeedbackBanner.tsx`, `components/hud/AngleReadout.tsx`
-- ⬜ `lib/audio/speak.ts` — Web Speech API wrapper w/ debounce
-- ⬜ Wire live voice cues to FSM/feedback state transitions (not raw frames)
+- ✅ Added `squat` and `pushup` `ExerciseConfig`s to `lib/exercises/configs.ts` (thresholds per `plan.md` §6: squat 100°/165° on left hip-knee-ankle, push-up 90°/160° on left shoulder-elbow-wrist)
+- ✅ Form rules for all three exercises (heuristic, see note below): bicep curl `elbow_drift` (shoulder-hip-elbow angle, torso drift), squat `knee_valgus` (knee-width/ankle-width ratio, gated to only check while actually bent) + `torso_lean` (shoulder-hip-knee angle), push-up `hip_sag` (shoulder-hip-ankle body-line angle)
+- ✅ `lib/exercises/feedback.ts` — `FeedbackEngine` class: computes primary+secondary joint angles once per frame, runs all of an exercise's `formRules` against them, and — like the FSM — tracks false→true transitions separately from "still active" so callers only get a *new* violation once, not every frame it holds
+- ✅ `components/hud/FormFeedbackBanner.tsx` (severity-colored pill, top-center) and `components/hud/AngleReadout.tsx` (top-right, primary joint angle in degrees)
+- ✅ `lib/audio/speak.ts` — Web Speech API wrapper per `plan.md` §8 (debounced via `minGapMs`, SSR-safe `typeof window` guard since this is imported from a `"use client"` file that Next still pre-renders server-side once)
+- ✅ Wired into `WorkoutSession.tsx`: rep completion speaks the new rep count (reads `useSessionStore.getState().repCount` right after `incrementRep()` rather than threading the new value through separately); newly-violated form rules speak their message; the angle readout is throttled to update state at most every 150ms (not every frame) to avoid unnecessary re-renders on a fast-changing number
+- ✅ Unit tests: `lib/exercises/feedback.test.ts` (10 tests — `FeedbackEngine` new-vs-still-active tracking and reset, plus real geometry cases for all three exercises' form rules, both triggering and non-triggering)
+- ✅ Verified: `npx next typegen`, `tsc --noEmit`, `eslint .`, `npx vitest run` (29/29 passing), `next build` all clean
+
+**Be honest about the form-rule thresholds:** `knee_valgus`'s width-ratio cutoff (`0.8`), `torso_lean`'s angle cutoff (`60°`), and `hip_sag`'s cutoff (`160°`) are reasonable starting heuristics, not values tuned against real recorded reps — they were picked so the *logic* is demonstrably correct (verified by synthetic-geometry unit tests) and are very likely to need adjustment once tested against an actual camera and body. Flag this if evaluated academically — the mechanism is real, the exact numbers are placeholders.
+
+**Manually verify before moving on:** run `npm run dev` and try all three exercises — confirm reps count, a spoken number is heard on each rep, deliberately breaking form (e.g. flaring the elbow on a curl, caving the knees on a squat) shows the banner and triggers a spoken cue once (not repeatedly while held), and the angle readout updates smoothly without visibly janking the video. (Not yet done in this session — no browser available here.)
 
 ## Phase 5 — Gemini Coaching Layer ⬜
 

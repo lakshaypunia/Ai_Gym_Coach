@@ -2,10 +2,10 @@
 
 A step-by-step explanation of how each part of the system actually works, for
 whoever needs to explain, defend, or extend this project. Written against the
-code as it exists after Phase 3 (camera → pose tracking → rep counting).
-Cross-references `plan.md` (the original design) and `steps.md` (build
-progress) — this file explains the *how* and *why* behind what's checked off
-there.
+code as it exists after Phase 4 (camera → pose tracking → rep counting →
+posture feedback → voice cues, for all three exercises). Cross-references
+`plan.md` (the original design) and `steps.md` (build progress) — this file
+explains the *how* and *why* behind what's checked off there.
 
 ---
 
@@ -19,12 +19,18 @@ Webcam ──▶ <video> element ──▶ PoseLandmarker (MediaPipe) ──▶ 
                                                                     │
                                                                     ▼
                                                     angleBetweenPoints()
-                                                    (shoulder-elbow-wrist)
-                                                                    │
-                                                                    ▼
-                                                      RepCounterFsm.update()
-                                                                    │
-                                                          rep completed? ──▶ Zustand store ──▶ RepCounter HUD
+                                                    (per-exercise joints)
+                                                          │              │
+                                                          ▼              ▼
+                                            RepCounterFsm.update()  FeedbackEngine.evaluate()
+                                                          │              │
+                                                  rep completed?   rule newly violated?
+                                                          │              │
+                                                          ▼              ▼
+                                                  Zustand store ──▶ HUD (RepCounter,
+                                                          │        FormFeedbackBanner,
+                                                          ▼        AngleReadout)
+                                                     speak() (Web Speech API)
 ```
 
 Everything above the Zustand store runs **entirely in the browser, per video
@@ -366,14 +372,23 @@ export interface ExerciseConfig {
   secondaryJoints?: JointTriple[]; // form-rule checks only (Phase 4)
   downThresholdDeg: number;        // angle below this = "contracted"
   upThresholdDeg: number;          // angle above this = "extended"
-  formRules: FormRule[];           // posture checks (Phase 4)
+  formRules: FormRule[];           // posture checks
 }
 ```
 
-The current `bicep_curl` config tracks the **left shoulder → elbow → wrist**
-angle, with thresholds taken directly from `plan.md` §6: below `30°` counts
-as fully curled ("down" phase), above `160°` counts as fully extended ("up"
-phase).
+All three exercises now have a full config, with thresholds taken from
+`plan.md` §6:
+
+| Exercise | Primary joint | Down | Up |
+|---|---|---|---|
+| `bicep_curl` | left shoulder→elbow→wrist | ≤30° | ≥160° |
+| `squat` | left hip→knee→ankle | ≤100° | ≥165° |
+| `pushup` | left shoulder→elbow→wrist | ≤90° | ≥160° |
+
+Each also has `secondaryJoints` and `formRules` feeding the posture-feedback
+engine in §10 — e.g. squat additionally tracks a **left shoulder→hip→knee**
+angle (`secondaryJoints`, labeled `left_torso_lean`) purely for its
+`torso_lean` form rule; it plays no part in rep counting.
 
 ---
 
@@ -417,7 +432,81 @@ transition is never accidentally debounced away.
 
 ---
 
-## 10. Putting it all together — one frame, start to finish
+## 10. Posture feedback — `lib/exercises/feedback.ts`
+
+Rep counting only looks at the primary joint. Form checking is separate: each
+`ExerciseConfig` carries a list of `FormRule`s, each a small predicate —
+`check(frame, angles) => boolean`, `true` meaning "violated this frame" —
+plus a spoken `message` and a `severity`. Three examples currently
+implemented (heuristics, not values tuned against real recorded reps — see
+the caveat in §14):
+
+- **`elbow_drift`** (bicep curl): the angle at the shoulder between torso
+  (hip→shoulder) and upper arm (shoulder→elbow) — stays small while the
+  elbow is pinned to the torso, opens up past `45°` if it swings outward.
+- **`knee_valgus`** (squat): compares knee-to-knee horizontal distance
+  against ankle-to-ankle distance — knees noticeably narrower than the ankle
+  stance (`< 0.8×`) means they're caving inward. Deliberately gated to only
+  run once the primary knee angle shows an actual bend (`≤150°`), so a
+  naturally narrow standing stance doesn't false-positive.
+- **`hip_sag`** (push-up): the shoulder→hip→ankle angle should stay close to
+  a straight `180°` line during a plank position; a sag (or a pike) bends it
+  noticeably either way, flagged below `160°`.
+
+`FeedbackEngine.evaluate(frame)` computes every angle the exercise's
+`primaryJoint` + `secondaryJoints` need (once, shared across all of that
+exercise's rules), runs each `FormRule.check()` against them, and — mirroring
+the FSM's debounce logic in spirit — tracks which rule ids were already
+active last frame so it can report `newlyViolated` separately from `active`.
+This is what makes "speak once when a violation starts, not every frame it's
+held" possible (§11): a rule held true for two straight seconds only shows up
+in `newlyViolated` on the first of those frames.
+
+---
+
+## 11. Voice cues — `lib/audio/speak.ts`
+
+A thin wrapper around the browser's built-in
+[`SpeechSynthesis`](https://developer.mozilla.org/docs/Web/API/SpeechSynthesis)
+API — free, client-side, zero network round-trip, which matters because
+these cues fire *during* a live set where latency would be noticeable:
+
+```ts
+export function speak(text: string, { minGapMs = 1500 } = {}): void {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  const now = Date.now();
+  if (now - lastSpokenAt < minGapMs) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.1;
+  window.speechSynthesis.speak(utterance);
+  lastSpokenAt = now;
+}
+```
+
+Two things worth calling out:
+
+- **The `typeof window === "undefined"` guard** isn't defensive boilerplate —
+  it's load-bearing. `WorkoutSession.tsx` is a `"use client"` component, but
+  Next.js still renders client components to HTML once on the server for the
+  initial paint, and `window`/`speechSynthesis` don't exist there. Without
+  this guard, importing this module would crash the build.
+- **The debounce (`minGapMs`, default 1500ms) plus `cancel()` before every
+  new utterance** means calling `speak()` rapidly (e.g. several form rules
+  becoming violated in the same frame) never queues up overlapping or
+  backlogged speech — only one cue plays, and a fast burst of triggers just
+  drops the extras rather than spamming them back-to-back.
+
+Per `plan.md` §8, voice is wired to **state transitions**, never raw frames:
+`WorkoutSession.handleLandmarks()` calls `speak()` in exactly two places —
+once when the FSM reports `repCompleted` (speaking the new rep count, read
+via `useSessionStore.getState().repCount` right after `incrementRep()`), and
+once per rule in `FeedbackEngine`'s `newlyViolated` list (§10) — never on a
+plain per-frame basis.
+
+---
+
+## 12. Putting it all together — one frame, start to finish
 
 Concretely, here's everything that happens for a single video frame once a
 workout session is live:
@@ -439,17 +528,22 @@ workout session is live:
 9. `RepCounterFsm.update(angle, visible, timestamp)` advances the state
    machine (or freezes it, per the guards in §9).
 10. If it reports `repCompleted: true`, `useSessionStore().incrementRep()` is
-    called, bumping the Zustand store's `repCount`.
-11. The `RepCounter` HUD component (plain React, subscribed to
-    `state.repCount`) re-renders with the new number.
+    called (bumping `repCount`) and `speak()` announces the new count.
+11. `FeedbackEngine.evaluate(frame)` (§10) computes every form-rule angle for
+    this exercise and runs its rules; any `newlyViolated` rule calls
+    `speak(rule.message)` (§11).
+12. React state updates: `RepCounter` re-renders off the store's `repCount`;
+    `FormFeedbackBanner` re-renders if the active violation changed; the
+    throttled `AngleReadout` updates at most every 150ms, not every frame.
 
-Steps 1–9 happen entirely outside React's render cycle (imperative canvas +
-plain function calls); only step 11 is a "normal" React re-render — and it
-only happens when a rep actually completes, not 30 times a second.
+Steps 1–11 happen entirely outside React's render cycle (imperative canvas +
+plain function calls, `speak()` calls); only step 12 involves "normal" React
+re-renders, and each of those three only fires when its specific value
+actually changes — not 30 times a second for all of them.
 
 ---
 
-## 11. Testing strategy so far
+## 13. Testing strategy so far
 
 Per `plan.md` §11, the parts that are pure logic (no camera/DOM needed) are
 covered by unit tests (`vitest`, run via `npm run test`):
@@ -465,16 +559,20 @@ covered by unit tests (`vitest`, run via `npm run test`):
   held position, still converges to a real sustained movement instead of
   staying permanently lagged, and re-initializes cleanly if the landmark
   count changes.
+- **`lib/exercises/feedback.test.ts`** — `FeedbackEngine`'s new-vs-still-active
+  tracking (including re-triggering after a violation clears and comes back)
+  and `reset()`; plus real synthetic-geometry cases for all three exercises'
+  form rules, each with both a triggering and a non-triggering frame.
 
 What's *not* yet covered (deferred to later phases, or requiring an actual
 browser + camera to verify): real landmark noise from a live camera feed,
-cross-device/cross-lighting behavior, voice cue timing, and the Gemini API
-integration's failure fallbacks. `steps.md` tracks these explicitly under
-each phase's "manually verify before moving on" note.
+cross-device/cross-lighting behavior, actual spoken-audio output, and the
+Gemini API integration's failure fallbacks. `steps.md` tracks these
+explicitly under each phase's "manually verify before moving on" note.
 
 ---
 
-## 12. Key engineering decisions (and where they deviate from `plan.md`)
+## 14. Key engineering decisions (and where they deviate from `plan.md`)
 
 - **CDN-hosted WASM + model, not self-hosted in `public/`.** The WASM bundle
   alone is ~34MB — too large to commit to the repo. `plan.md` §4 listed
@@ -506,15 +604,26 @@ each phase's "manually verify before moving on" note.
   optimization, pulled forward from its originally planned Phase 7 slot
   because it directly improves per-frame latency, which is part of the same
   "smoothness" complaint.
+- **Form-rule thresholds are heuristic placeholders, not tuned values.**
+  `knee_valgus`'s `0.8` width ratio, `torso_lean`'s `60°` cutoff, and
+  `hip_sag`'s `160°` cutoff were picked so the *mechanism* is demonstrably
+  correct (each has a passing and a failing synthetic-geometry unit test —
+  §13), not because they were validated against real recorded reps. Worth
+  being upfront about this if the project is evaluated academically: the
+  architecture (angle → rule → debounced voice cue) is real and tested, the
+  exact numeric cutoffs are a reasonable starting guess that will likely need
+  adjusting once tried against an actual body on an actual camera.
 
 ---
 
-## 13. What's next (Phase 4+)
+## 15. What's next (Phase 5+)
 
-Per `steps.md`: squat/push-up `ExerciseConfig`s, the posture-correction
-`FormRule` engine (`lib/exercises/feedback.ts`), live spoken cues on rep/form
-transitions (`lib/audio/speak.ts`, Web Speech API), and eventually the
-Gemini-powered post-workout summary and next-workout suggestion (Phase 5) —
-all layered on top of the same per-frame pipeline described in §10 without
-changing its shape: feedback rules and voice cues hook into the *same*
-FSM/angle events, not raw per-frame landmarks.
+Per `steps.md`: the Gemini-powered post-workout summary and next-workout
+suggestion (`lib/ai/geminiClient.ts`, `app/api/feedback/route.ts`,
+`app/api/plan/route.ts`), an "End Session" flow to actually trigger them
+(`SessionSummaryModal`, `SuggestedWorkoutCard`), and an offline/failure
+fallback so the app never feels broken without connectivity — all layered on
+top of the same per-frame pipeline described in §12 without changing its
+shape. The one new voice cue `plan.md` §8 still calls for but isn't wired up
+yet is the end-of-set announcement ("Set complete, N reps") — it's tied to an
+explicit "End Session" action that doesn't exist until Phase 5 adds it.
