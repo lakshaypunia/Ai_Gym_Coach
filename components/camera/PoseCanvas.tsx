@@ -19,6 +19,18 @@ interface PoseCanvasProps {
 const POINT_RADIUS = 4;
 const LINE_WIDTH = 3;
 
+// The model doesn't need full camera resolution to find landmarks — feeding
+// it a downscaled frame cuts the per-frame inference cost substantially
+// (especially on the CPU delegate) without touching the on-screen video's
+// sharpness or the skeleton's drawing precision (landmarks are normalized
+// 0..1, so they scale back up to full res regardless of input size).
+const MAX_DETECTION_DIMENSION = 480;
+
+function computeDetectionSize(width: number, height: number): { width: number; height: number } {
+  const scale = Math.min(1, MAX_DETECTION_DIMENSION / Math.max(width, height));
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+}
+
 export function PoseCanvas({ video, active, onLandmarks, onStatusChange, className }: PoseCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -26,6 +38,9 @@ export function PoseCanvas({ video, active, onLandmarks, onStatusChange, classNa
     if (!video || !active) return;
 
     const canvas = canvasRef.current;
+    const detectionCanvas = document.createElement("canvas");
+    const detectionCtx = detectionCanvas.getContext("2d");
+
     let cancelled = false;
     let landmarker: PoseLandmarker | null = null;
     let rafHandle: number | null = null;
@@ -59,18 +74,32 @@ export function PoseCanvas({ video, active, onLandmarks, onStatusChange, classNa
     }
 
     function processFrame() {
-      if (cancelled || !landmarker || !video) return;
+      if (cancelled || !landmarker || !video || !detectionCtx) return;
 
       if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
-        const result = landmarker.detectForVideo(video, performance.now());
-        drawResult(result.landmarks[0] ?? null);
+        const nowMs = performance.now();
+
+        const { width: detWidth, height: detHeight } = computeDetectionSize(
+          video.videoWidth,
+          video.videoHeight,
+        );
+        if (detWidth > 0 && detHeight > 0) {
+          if (detectionCanvas.width !== detWidth || detectionCanvas.height !== detHeight) {
+            detectionCanvas.width = detWidth;
+            detectionCanvas.height = detHeight;
+          }
+          detectionCtx.drawImage(video, 0, 0, detWidth, detHeight);
+
+          const result = landmarker.detectForVideo(detectionCanvas, nowMs);
+          drawResult(result.landmarks[0] ?? null, nowMs);
+        }
       }
 
       scheduleNextFrame();
     }
 
-    function drawResult(rawLandmarks: Landmark[] | null) {
+    function drawResult(rawLandmarks: Landmark[] | null, nowMs: number) {
       if (!canvas || !video) return;
 
       const width = video.videoWidth;
@@ -91,7 +120,7 @@ export function PoseCanvas({ video, active, onLandmarks, onStatusChange, classNa
         return;
       }
 
-      const landmarks = smoother.smooth(rawLandmarks);
+      const landmarks = smoother.smooth(rawLandmarks, nowMs);
 
       ctx.strokeStyle = "#22d3ee";
       ctx.lineWidth = LINE_WIDTH;
@@ -112,7 +141,7 @@ export function PoseCanvas({ video, active, onLandmarks, onStatusChange, classNa
         ctx.fill();
       }
 
-      onLandmarks?.({ landmarks, timestampMs: performance.now() });
+      onLandmarks?.({ landmarks, timestampMs: nowMs });
     }
 
     return () => {

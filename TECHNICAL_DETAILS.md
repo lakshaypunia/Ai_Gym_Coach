@@ -15,7 +15,7 @@ there.
 Webcam ──▶ <video> element ──▶ PoseLandmarker (MediaPipe) ──▶ 33 landmarks
                                                                     │
                                                                     ▼
-                                                          EMA smoothing
+                                                    One Euro smoothing
                                                                     │
                                                                     ▼
                                                     angleBetweenPoints()
@@ -206,9 +206,22 @@ normal render cycle:
    last-processed value (`lastVideoTime`) so the same decoded frame is never
    run through the model twice if the callback fires faster than the video's
    own frame rate.
-3. **Detect.** `landmarker.detectForVideo(video, performance.now())` runs
-   inference on the current frame.
-4. **Draw imperatively.** The result is drawn straight onto a `<canvas>` via
+3. **Downscale before detecting.** The captured video runs at up to 1280×720,
+   but the model doesn't need that many pixels to find landmarks — every
+   frame is first drawn onto a small offscreen `<canvas>` capped at 480px on
+   the long edge (`computeDetectionSize()`) via `ctx.drawImage(video, 0, 0, w, h)`,
+   and *that* downscaled canvas — not the raw video — is what's passed to
+   `detectForVideo()`. This cuts the pixels the model has to process by
+   roughly 7× for a 720p source, which matters most on the CPU delegate
+   fallback (§4c). It doesn't touch the on-screen video's sharpness, and it
+   doesn't lose any *drawing* precision either — MediaPipe always returns
+   landmarks normalized to 0..1 regardless of input resolution, so mapping
+   them back onto the full-resolution display canvas in step 5 is exactly as
+   precise as if detection had run on the full frame; only the model's
+   *input* got smaller, not its coordinate system.
+4. **Detect.** `landmarker.detectForVideo(detectionCanvas, timestamp)` runs
+   inference on that downscaled frame.
+5. **Draw imperatively.** The result is drawn straight onto a `<canvas>` via
    the 2D context (`ctx.moveTo`/`lineTo`/`arc`) — connecting lines using
    `PoseLandmarker.POSE_CONNECTIONS` (a static array of `{start, end}`
    landmark-index pairs Google ships for exactly this purpose) and a dot per
@@ -216,7 +229,7 @@ normal render cycle:
    30+ times a second just to move some canvas pixels would be wasteful;
    `plan.md` §10 calls this out explicitly ("only rep count / feedback text
    trigger React state updates").
-5. **Report upward.** Once drawn, the smoothed landmarks are handed to the
+6. **Report upward.** Once drawn, the smoothed landmarks are handed to the
    parent via the `onLandmarks` callback prop — this is how `WorkoutSession.tsx`
    gets the data it needs for angle/rep-counting (§9) without the hot loop
    itself knowing anything about exercises or FSMs.
@@ -236,20 +249,31 @@ holding still — sensor/model noise, not real movement. Left unfiltered, this
 jitter can cause the angle computed in §7 to wobble across a rep-counting
 threshold and register a false rep.
 
-`LandmarkSmoother` applies an **exponential moving average (EMA)** to each
-landmark's `x`/`y`/`z` independently, frame over frame:
+`LandmarkSmoother` runs an independent **One Euro Filter**
+([Casiez, Roussel & Vogel, 2012](https://cristal.univ-lille.fr/~casiez/1euro/))
+per landmark, per axis (`x`/`y`/`z`). A first pass at this used a plain fixed
+exponential moving average (EMA) — `smoothed = smoothed + alpha × (raw -
+smoothed)` — but a *fixed* `alpha` forces one trade-off for every situation:
+turn it up and held-still landmarks stay jittery; turn it down and a fast rep
+visibly lags behind the real movement. One Euro fixes this by adapting the
+smoothing amount to how fast the point is currently moving:
 
-```
-smoothed[t] = smoothed[t-1] + alpha × (raw[t] - smoothed[t-1])
+1. It low-pass filters the signal's own **derivative** (its velocity) first.
+2. It uses that estimated speed to pick the cutoff frequency for smoothing
+   the actual value: `cutoff = minCutoff + beta × |velocity|` — nearly still
+   → low cutoff → heavy smoothing (kills jitter); moving fast → high cutoff →
+   light smoothing (stays responsive, no lag).
+
+```ts
+const cutoff = this.minCutoff + this.beta * Math.abs(dxSmoothed);
+const xSmoothed = lowPass(x, this.xPrev, alpha(cutoff, dt));
 ```
 
-which is exactly what `lerp(prev, landmark.x, alpha)` computes. `alpha`
-(default `0.4`) controls the trade-off: closer to `0` = heavier smoothing but
-more lag behind real movement; closer to `1` = more responsive but less
-jitter reduction. `0.4` was picked as a reasonable middle ground for a
-~30fps loop — noticeably steadies the skeleton without making fast reps feel
-laggy. `smoother.reset()` is called whenever a frame has no detected person,
-so the filter doesn't "remember" a stale position across a gap in detection.
+`minCutoff` and `beta` are tuned for landmarks' normalized 0..1 coordinate
+space (not the pixel-scale defaults from the original paper's mouse-tracking
+demo, which assume velocities in the hundreds). `smoother.reset()` is called
+whenever a frame has no detected person, so the filter doesn't "remember" a
+stale position (and a stale velocity estimate) across a gap in detection.
 
 ---
 
@@ -399,24 +423,28 @@ Concretely, here's everything that happens for a single video frame once a
 workout session is live:
 
 1. `PoseCanvas`'s frame callback fires (`requestVideoFrameCallback`).
-2. It calls `landmarker.detectForVideo(video, timestamp)` → 33 raw landmarks.
-3. `LandmarkSmoother.smooth()` EMA-filters them against the previous frame.
-4. The skeleton is drawn on the canvas (connections + dots).
-5. The smoothed landmarks + timestamp are handed to `WorkoutSession.handleLandmarks()`
+2. The current video frame is drawn onto a small offscreen canvas, downscaled
+   to ≤480px on the long edge (§5, step 3).
+3. `landmarker.detectForVideo(detectionCanvas, timestamp)` → 33 raw landmarks.
+4. `LandmarkSmoother.smooth()` runs each landmark through its One Euro filter
+   against its previous state.
+5. The skeleton is drawn on the (full-resolution) display canvas (connections
+   + dots).
+6. The smoothed landmarks + timestamp are handed to `WorkoutSession.handleLandmarks()`
    via the `onLandmarks` callback.
-6. `angleForJoint(landmarks, exerciseConfig.primaryJoint)` computes the
+7. `angleForJoint(landmarks, exerciseConfig.primaryJoint)` computes the
    shoulder-elbow-wrist angle for this frame.
-7. `isJointVisible(...)` checks whether that computation should even be
+8. `isJointVisible(...)` checks whether that computation should even be
    trusted this frame.
-8. `RepCounterFsm.update(angle, visible, timestamp)` advances the state
+9. `RepCounterFsm.update(angle, visible, timestamp)` advances the state
    machine (or freezes it, per the guards in §9).
-9. If it reports `repCompleted: true`, `useSessionStore().incrementRep()` is
-   called, bumping the Zustand store's `repCount`.
-10. The `RepCounter` HUD component (plain React, subscribed to
+10. If it reports `repCompleted: true`, `useSessionStore().incrementRep()` is
+    called, bumping the Zustand store's `repCount`.
+11. The `RepCounter` HUD component (plain React, subscribed to
     `state.repCount`) re-renders with the new number.
 
-Steps 1–8 happen entirely outside React's render cycle (imperative canvas +
-plain function calls); only step 10 is a "normal" React re-render — and it
+Steps 1–9 happen entirely outside React's render cycle (imperative canvas +
+plain function calls); only step 11 is a "normal" React re-render — and it
 only happens when a rep actually completes, not 30 times a second.
 
 ---
@@ -432,6 +460,11 @@ covered by unit tests (`vitest`, run via `npm run test`):
 - **`lib/exercises/fsm.test.ts`** — one rep per full cycle, no double-count
   on mid-phase jitter, debounce behavior, occlusion freeze/resume, and
   reset.
+- **`lib/pose/smoothing.test.ts`** — the One Euro filter passes the first
+  sample through unchanged, meaningfully dampens synthetic jitter around a
+  held position, still converges to a real sustained movement instead of
+  staying permanently lagged, and re-initializes cleanly if the landmark
+  count changes.
 
 What's *not* yet covered (deferred to later phases, or requiring an actual
 browser + camera to verify): real landmark noise from a live camera feed,
@@ -463,6 +496,16 @@ each phase's "manually verify before moving on" note.
   `@types/node@^22 || >=24`, which conflicts with this scaffold's
   `@types/node@^20` pin. `vitest@3` supports `^20` directly, avoiding an
   unrelated dependency bump just to add a test runner.
+- **Smoothing upgraded from a fixed-alpha EMA to a One Euro filter, and
+  detection input downscaled to ≤480px**, after initial hands-on testing felt
+  jittery/less smooth than desired. `plan.md` §4 listed "EMA/one-euro filter"
+  as alternatives up front; One Euro was the better fit specifically because
+  it adapts to movement speed instead of committing to one fixed smoothing
+  amount for both "holding still" and "mid-rep" (see §6). The detection
+  downscale is `plan.md` §10's "downscale video input fed to the model"
+  optimization, pulled forward from its originally planned Phase 7 slot
+  because it directly improves per-frame latency, which is part of the same
+  "smoothness" complaint.
 
 ---
 

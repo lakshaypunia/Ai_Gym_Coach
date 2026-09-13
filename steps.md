@@ -57,6 +57,17 @@ scope changes or a checklist item is completed.
 
 **Manually verify before moving on:** run `npm run dev`, open `/workout/bicep_curl`, and do a few real curls to confirm the rep counter increments once per curl with no double-counts or missed reps. (Not yet done in this session — no browser available here; the FSM logic itself is covered by unit tests, but real landmark noise from an actual camera is the real test.)
 
+### Post-Phase-3 smoothness pass (2026-09-13)
+
+User tested in a real browser and reported it working but not smooth enough. Two changes, pulled forward from later plan phases:
+
+- ✅ `lib/pose/smoothing.ts` — replaced the fixed-alpha EMA with a **One Euro filter** (adapts smoothing to movement speed instead of one fixed trade-off — see `TECHNICAL_DETAILS.md` §6). Added `lib/pose/smoothing.test.ts` (4 tests: passthrough on first sample, dampens held-still jitter, still tracks a real sustained movement, re-inits on landmark-count change).
+- ✅ `components/camera/PoseCanvas.tsx` — detection now runs on a downscaled (≤480px long edge) offscreen canvas instead of the full 720p video frame, cutting model input pixels ~7× (`plan.md` §10's "downscale video input" optimization, pulled forward from Phase 7). Display/skeleton resolution and drawing precision are unaffected — only the model's input got smaller.
+- ✅ `TECHNICAL_DETAILS.md` updated (§1, §5, §6, §10, §11, §12) to describe One Euro + the downscale instead of the old EMA/full-res approach.
+- ✅ Verified: `npx vitest run` (19/19 passing), `tsc --noEmit`, `eslint .`, `next build` all clean.
+
+**Still needs a real browser check:** whether this actually *feels* smoother is unverified from this session — worth trying `/workout/bicep_curl` again and reporting back.
+
 ## Phase 4 — Multi-exercise + Feedback + Voice Cues ⬜
 
 - ⬜ Add `squat` and `pushup` configs
