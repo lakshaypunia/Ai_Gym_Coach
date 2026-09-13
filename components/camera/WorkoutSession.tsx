@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { CameraFeed } from "@/components/camera/CameraFeed";
+import { PoseCanvas } from "@/components/camera/PoseCanvas";
 import { RepCounter } from "@/components/hud/RepCounter";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import type { ExerciseSummary } from "@/lib/exercises/list";
@@ -16,11 +17,19 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
   const setExerciseId = useSessionStore((state) => state.setExerciseId);
   const reset = useSessionStore((state) => state.reset);
 
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [poseStatus, setPoseStatus] = useState<"loading-model" | "running" | "error">(
+    "loading-model",
+  );
+  const [poseError, setPoseError] = useState<string | null>(null);
+
   useEffect(() => {
     setExerciseId(exercise.id);
     return () => reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exercise.id]);
+
+  const cameraReady = status === "camera-ready";
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
@@ -36,22 +45,43 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
       <div className="relative aspect-video w-full">
         <CameraFeed
           className="h-full w-full"
-          onReady={() => {
+          onReady={(video) => {
             setCameraError(null);
             setStatus("camera-ready");
+            setVideoEl(video);
           }}
           onError={(message) => setCameraError(message)}
         />
-        {status === "camera-ready" && <RepCounter count={repCount} />}
+
+        {cameraReady && (
+          <PoseCanvas
+            video={videoEl}
+            active={cameraReady}
+            onStatusChange={(nextStatus, message) => {
+              setPoseStatus(nextStatus);
+              setPoseError(message ?? null);
+            }}
+          />
+        )}
+
+        {cameraReady && <RepCounter count={repCount} />}
+
+        {cameraReady && poseStatus === "loading-model" && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs text-zinc-200">
+            Loading pose model…
+          </div>
+        )}
       </div>
 
       {status === "camera-error" && cameraError && (
         <p className="text-sm text-red-500">{cameraError}</p>
       )}
 
+      {poseStatus === "error" && poseError && <p className="text-sm text-red-500">{poseError}</p>}
+
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        Pose detection, rep counting, and live feedback are coming in the next phase — for now this
-        confirms the camera pipeline works end to end.
+        Rep counting and live form feedback are coming in the next phase — for now this confirms
+        the skeleton overlay tracks in real time.
       </p>
     </div>
   );

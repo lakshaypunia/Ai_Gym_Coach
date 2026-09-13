@@ -30,13 +30,16 @@ scope changes or a checklist item is completed.
 
 ---
 
-## Phase 2 — Pose Pipeline ⬜
+## Phase 2 — Pose Pipeline ✅ (done 2026-09-13)
 
-- ⬜ `lib/pose/poseLandmarker.ts` — load/init `PoseLandmarker` (WASM + WebGL delegate, "lite" model, lazy-loaded on `/workout/[exerciseId]` only)
-- ⬜ Self-host or CDN-load the `pose_landmarker_lite.task` model file (decide: `public/models/` vs CDN)
-- ⬜ `components/camera/PoseCanvas.tsx` — canvas overlay driven by `requestVideoFrameCallback`/`detectForVideo`, imperative draw (no per-frame React state)
-- ⬜ `lib/pose/smoothing.ts` — EMA or One-Euro filter on landmark coords
-- ⬜ Wire into `WorkoutSession.tsx`: landmarks drawn as skeleton overlay in real time
+- ✅ `lib/pose/poseLandmarker.ts` — singleton `PoseLandmarker` loader, GPU (WebGL) delegate with automatic CPU fallback, `runningMode: "VIDEO"`, cached across mounts so re-entering a session doesn't reload WASM
+- ✅ Model + WASM runtime loaded from CDN (jsdelivr for the WASM fileset pinned to the installed `@mediapipe/tasks-vision@1.0.1`, Google's hosted `pose_landmarker_lite` model) — decided against self-hosting: the WASM bundle alone is ~34MB, too large to vendor into the repo/`public/`, and CDN static-asset downloads don't violate the "no video/landmark data leaves the browser" principle
+- ✅ `components/camera/PoseCanvas.tsx` — canvas overlay using `requestVideoFrameCallback` (falls back to `requestAnimationFrame` if unsupported), synchronous `detectForVideo` per new frame, skeleton drawn imperatively via 2D canvas (no React state in the hot path); reports status (`loading-model`/`running`/`error`) and per-frame landmarks via callback props
+- ✅ `lib/pose/smoothing.ts` — `LandmarkSmoother` (EMA, alpha configurable, default 0.4)
+- ✅ Wired into `WorkoutSession.tsx` — skeleton overlay renders live once the camera is ready; shows a "Loading pose model…" chip and surfaces pose errors
+- ✅ Verified: `npx next typegen`, `tsc --noEmit`, `eslint .`, `next build` all clean
+
+**Manually verify before moving on:** run `npm run dev`, open a `/workout/[exerciseId]` session, and confirm the cyan/yellow skeleton overlay tracks your body in real time with no visible lag. (Not yet done in this session — no browser available here.)
 
 ## Phase 3 — Angle Engine + FSM ⬜
 
