@@ -93,7 +93,9 @@ export const CameraFeed = forwardRef<HTMLVideoElement, CameraFeedProps>(
     }, []);
 
     return (
-      <div className={`relative overflow-hidden rounded-xl bg-black ${className ?? ""}`}>
+      <div
+        className={`relative overflow-hidden rounded-2xl bg-black ring-1 ring-white/10 ${className ?? ""}`}
+      >
         <video
           ref={(node) => {
             internalRef.current = node;
@@ -106,14 +108,18 @@ export const CameraFeed = forwardRef<HTMLVideoElement, CameraFeedProps>(
         />
 
         {status === "requesting" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-sm text-zinc-200">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 text-sm text-zinc-300">
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white" />
             Requesting camera access…
           </div>
         )}
 
         {status === "error" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/85 px-6 text-center text-sm text-red-300">
-            <span>{errorMessage}</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/90 px-6 text-center">
+            <span aria-hidden className="text-2xl">
+              🚫
+            </span>
+            <span className="text-sm text-red-300">{errorMessage}</span>
           </div>
         )}
       </div>

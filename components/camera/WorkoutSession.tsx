@@ -111,20 +111,37 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
   const cameraReady = status === "camera-ready";
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-10">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 px-6 py-10">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <Link href="/workout" className="text-sm text-zinc-500 hover:underline">
+          <Link
+            href="/workout"
+            className="mb-1 inline-flex items-center gap-1 text-sm text-muted transition-colors hover:text-foreground"
+          >
             ← Back to exercises
           </Link>
-          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">{exercise.name}</h1>
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden
+              className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-lg"
+            >
+              {exercise.icon}
+            </span>
+            <h1 className="text-2xl font-semibold tracking-tight">{exercise.name}</h1>
+            {cameraReady && exerciseConfig && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                Live
+              </span>
+            )}
+          </div>
         </div>
 
         {cameraReady && exerciseConfig && repCount > 0 && (
           <button
             type="button"
             onClick={handleEndSession}
-            className="rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black hover:bg-black/5 dark:border-white/10 dark:text-zinc-50 dark:hover:bg-white/10"
+            className="shrink-0 rounded-full bg-accent px-4 py-2 text-sm font-medium text-accent-foreground shadow-sm shadow-accent/20 transition-transform hover:scale-[1.03] active:scale-[0.98]"
           >
             End session
           </button>
@@ -169,24 +186,27 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
         )}
 
         {cameraReady && poseStatus === "loading-model" && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs text-zinc-200">
+          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/60 px-3 py-1.5 text-xs text-zinc-200 ring-1 ring-white/10 backdrop-blur-md">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/25 border-t-white" />
             Loading pose model…
           </div>
         )}
       </div>
 
       {status === "camera-error" && cameraError && (
-        <p className="text-sm text-red-500">{cameraError}</p>
+        <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-500">{cameraError}</p>
       )}
 
-      {poseStatus === "error" && poseError && <p className="text-sm text-red-500">{poseError}</p>}
+      {poseStatus === "error" && poseError && (
+        <p className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-500">{poseError}</p>
+      )}
 
       {exerciseConfig ? (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-sm text-muted">
           Rep counting, form feedback, and spoken cues are all live.
         </p>
       ) : (
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="text-sm text-muted">
           Rep counting for {exercise.name} isn&apos;t wired up yet — the skeleton overlay above
           still tracks in real time.
         </p>

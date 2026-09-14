@@ -4,10 +4,8 @@ import { EXERCISES } from "@/lib/exercises/list";
 export default function WorkoutPickerPage() {
   return (
     <div className="mx-auto w-full max-w-3xl flex-1 px-6 py-16">
-      <h1 className="mb-2 text-2xl font-semibold text-black dark:text-zinc-50">
-        Choose an exercise
-      </h1>
-      <p className="mb-8 text-sm text-zinc-600 dark:text-zinc-400">
+      <h1 className="mb-2 text-3xl font-semibold tracking-tight">Choose an exercise</h1>
+      <p className="mb-8 text-sm text-muted">
         Your camera feed stays on-device — pose data never leaves the browser.
       </p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

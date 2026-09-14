@@ -37,14 +37,22 @@ export function SuggestedWorkoutCard() {
   }, []);
 
   return (
-    <div className="w-full max-w-md rounded-xl border border-black/10 bg-white p-5 text-left dark:border-white/10 dark:bg-zinc-900">
-      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-        Suggested for today
-      </h3>
+    <div className="w-full max-w-md rounded-xl border border-accent/20 bg-accent-soft p-5 text-left">
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden className="text-base">
+          ✨
+        </span>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-accent">
+          Suggested for today
+        </h3>
+      </div>
       {loading ? (
-        <p className="text-sm text-zinc-500">Loading today&apos;s suggestion…</p>
+        <div className="flex flex-col gap-2">
+          <div className="h-3.5 w-full animate-pulse rounded bg-accent/15" />
+          <div className="h-3.5 w-4/5 animate-pulse rounded bg-accent/15" />
+        </div>
       ) : (
-        <p className="text-sm text-zinc-700 dark:text-zinc-300">{plan}</p>
+        <p className="text-sm leading-6 text-foreground/90">{plan}</p>
       )}
     </div>
   );
