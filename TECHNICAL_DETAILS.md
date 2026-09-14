@@ -2,10 +2,12 @@
 
 A step-by-step explanation of how each part of the system actually works, for
 whoever needs to explain, defend, or extend this project. Written against the
-code as it exists after Phase 4 (camera → pose tracking → rep counting →
-posture feedback → voice cues, for all three exercises). Cross-references
-`plan.md` (the original design) and `steps.md` (build progress) — this file
-explains the *how* and *why* behind what's checked off there.
+code as it exists after Phase 5 (camera → pose tracking → rep counting →
+posture feedback → voice cues → Gemini-powered session summary and
+suggested-workout card, for all three exercises), deployed to Render.
+Cross-references `plan.md` (the original design) and `steps.md` (build
+progress) — this file explains the *how* and *why* behind what's checked off
+there.
 
 ---
 
@@ -616,14 +618,158 @@ explicitly under each phase's "manually verify before moving on" note.
 
 ---
 
-## 15. What's next (Phase 5+)
+## 15. AI coaching — `lib/ai/geminiClient.ts`, and why it's Vertex AI, not the Gemini Developer API
 
-Per `steps.md`: the Gemini-powered post-workout summary and next-workout
-suggestion (`lib/ai/geminiClient.ts`, `app/api/feedback/route.ts`,
-`app/api/plan/route.ts`), an "End Session" flow to actually trigger them
-(`SessionSummaryModal`, `SuggestedWorkoutCard`), and an offline/failure
-fallback so the app never feels broken without connectivity — all layered on
-top of the same per-frame pipeline described in §12 without changing its
-shape. The one new voice cue `plan.md` §8 still calls for but isn't wired up
-yet is the end-of-set announcement ("Set complete, N reps") — it's tied to an
-explicit "End Session" action that doesn't exist until Phase 5 adds it.
+`plan.md` §9 designed this layer around the **Gemini Developer API**: a
+single API-key string (`GEMINI_API_KEY`) passed to the
+`@google/generative-ai` SDK, obtained from
+[aistudio.google.com](https://aistudio.google.com). That's the simplest way
+to call Gemini — no GCP project setup, just an API key.
+
+What was actually provided for this project (`secrets.json`) is a
+**GCP service account key** instead — a JSON file with a `private_key`,
+`client_email`, `project_id`, `type: "service_account"`, etc. That's a
+categorically different, more heavyweight credential: it's how a piece of
+backend code authenticates *as an identity within a Google Cloud project*,
+used across all of GCP (not just Gemini) — Cloud Storage, BigQuery, Vertex
+AI, anything IAM-gated. It cannot be used with the `@google/generative-ai`
+SDK, which only accepts the plain API-key string. **Vertex AI** is Google
+Cloud's enterprise-grade path to the same Gemini models, authenticated via
+exactly this kind of service account credential — so that's what this
+project uses instead, via the `@google-cloud/vertexai` SDK.
+
+Practically, this changes a few things from `plan.md`'s original sketch:
+
+```ts
+// plan.md's original sketch (Gemini Developer API):
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const result = await model.generateContent(prompt);
+return result.response.text(); // convenience method exists
+
+// What this project actually does (Vertex AI):
+const credentials = JSON.parse(fs.readFileSync("secrets.json", "utf-8"));
+const vertexAI = new VertexAI({
+  project: credentials.project_id,
+  location: "us-central1", // Vertex AI is regional; Developer API isn't
+  googleAuthOptions: { credentials: { client_email, private_key } },
+});
+const model = vertexAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const result = await model.generateContent(prompt);
+// no .text() helper — must reach into the response shape manually:
+const text = result.response.candidates?.[0]?.content?.parts
+  ?.map(p => p.text ?? "").join("").trim();
+```
+
+Three concrete differences worth knowing:
+
+1. **Regional endpoint.** Vertex AI is deployed per GCP region
+   (`location`, e.g. `us-central1`); the Developer API isn't. Configurable
+   via the optional `GEMINI_LOCATION` env var, defaulting to `us-central1`.
+2. **No `.text()` convenience method.** `extractResponseText()` in
+   `geminiClient.ts` does that extraction manually — `response.candidates[0]`
+   is the top-ranked generation, `.content.parts` is an array because a
+   response can mix text/function-call/etc. parts (here it's always plain
+   text, so parts are just joined).
+3. **The credential itself needs GCP-side setup** beyond just "having a key"
+   — the service account needs the Vertex AI API enabled on its project and
+   an IAM role like `roles/aiplatform.user` granted to it. This can't be
+   verified from this environment (no network access to make a real API
+   call) — if `/api/feedback`/`/api/plan` keep returning fallback text (§16)
+   in production, this is the first thing to check, via the actual error
+   logged by the route handlers.
+
+`getGeminiModel()` lazily creates and caches a single `GenerativeModel`
+instance module-wide (same caching pattern as `getPoseLandmarker()` in §4),
+so repeated calls across requests reuse one authenticated client rather than
+re-doing the GCP auth handshake every time. The credentials file path is read
+from `GOOGLE_APPLICATION_CREDENTIALS` (falling back to `./secrets.json`) —
+see §17 for why that matters for deployment. The whole module is marked with
+[`import "server-only"`](https://nextjs.org/docs/app/building-your-application/rendering/composition-patterns#keeping-server-only-code-out-of-the-client-environment),
+a Next.js/React convention that throws a build error if this module is ever
+pulled into a client bundle — a second, compiler-enforced layer on top of the
+fact that it reads a local file via `node:fs`, which would already fail to
+bundle for the browser.
+
+---
+
+## 16. Wiring it up — API routes, the summary modal, and "End Session"
+
+**The routes** (`app/api/feedback/route.ts`, `app/api/plan/route.ts`) are
+both the same shape: build a prompt (`buildSummaryPrompt.ts` /
+`buildPlanPrompt.ts`, straight ports of `plan.md` §9a/§9b's prompts), call
+Gemini, and **`try`/`catch` to a rule-based fallback string** on *any*
+failure — network error, GCP auth failure, or an empty response. This is
+`plan.md` §9's "offline fallback" requirement: the workout itself has zero
+network dependency (§1), so these two AI touches are the only things that
+could make the app *feel* broken without connectivity, and they're built to
+degrade instead. The fallback is deliberately simple, rule-based text (e.g.
+"Nice work — 15 reps of Squat. Keep an eye on: push your knees out.") — no
+second AI call, no retry loop, just always-available strings computed from
+the stats already in hand. The client side doubles this: `SessionSummaryModal`
+and `SuggestedWorkoutCard` also `.catch()` the `fetch()` itself, in case the
+route can't be reached at all.
+
+**`FeedbackEngine`'s per-frame violation *counts*** needed a new home to
+survive until "End Session" — `sessionStore.ts` gained `violationCounts`
+(a map from rule id to `{ruleId, message, count}`, incremented via
+`recordViolation()`, called anywhere `FeedbackEngine.evaluate()` reports a
+`newlyViolated` rule — same call site that already triggers the voice cue in
+§11) and `sessionStartedAt` (set once via `markSessionStarted()` when the
+camera first becomes ready, used to compute session duration).
+
+**"End Session"** (`WorkoutSession.handleEndSession`) is the trigger `plan.md`
+§8 called for but Phase 4 didn't have yet — it speaks "Set complete, N reps"
+(bypassing `speak()`'s debounce via `minGapMs: 0`, since this is a
+deliberate one-off announcement, not a rapid-fire cue that needs
+deduplicating), assembles a `SessionStats` object from the store, and opens
+`SessionSummaryModal`, which fetches `/api/feedback` with those stats and
+shows the result (loading → AI text or fallback), with an optional "Play"
+button that reads it aloud via the same `speak()` helper. Closing the modal
+resets the FSM, the feedback engine, and the store, then immediately restores
+`camera-ready` status and restarts the session timer — so a second set can
+start without leaving the page or re-requesting camera permission.
+
+**`SuggestedWorkoutCard`** (landing page) always calls `/api/plan` with an
+empty history array right now — there's no persisted session history yet
+(`lib/storage/history.ts` is Phase 6), so `buildPlanPrompt()` always takes
+its explicit "first-ever session" branch. This is a real, working feature
+today; it just isn't personalized yet. Revisiting it to pass real history is
+tracked in `steps.md` under Phase 6.
+
+---
+
+## 17. Deploying (Render) — pulled forward from Phase 7
+
+`plan.md` §2/§12 targeted Vercel; this project deploys to **Render**
+instead, at the user's request, ahead of Phases 6-7. The interesting part is
+`secrets.json`: it's gitignored (correctly — a private key should never be
+committed), which means a plain `git push`-based deploy never sees it.
+Render's **Secret Files** feature solves this: you upload the file's content
+directly through Render's dashboard (never through git), and Render mounts
+it into the running container at a fixed path, `/etc/secrets/<filename>`.
+
+That fixed mount path is why `geminiClient.ts` reads its credentials path
+from `GOOGLE_APPLICATION_CREDENTIALS` (§15) instead of hardcoding
+`./secrets.json` — `render.yaml` sets that env var to
+`/etc/secrets/secrets.json` to match where Render actually puts the file,
+while local dev (no env var set) falls back to the repo-root path where the
+file actually sits on this machine. Same code, different deployment, one env
+var doing the switching — the standard 12-factor-app pattern for
+environment-specific config.
+
+`DEPLOY.md` has the actual click-through steps (connecting the repo, adding
+the Secret File, verifying) — none of which could be done from this session,
+since deploying requires the user's own Render account and dashboard access.
+
+---
+
+## 18. What's next (Phase 6+)
+
+Per `steps.md`: persisted session history (`lib/storage/history.ts`,
+localStorage-backed `SessionRecord`s) and an `/history` page with stats and
+charts, after which `SuggestedWorkoutCard` (§16) should get updated to pass
+real history into `/api/plan` instead of always sending `[]`. Then Phase 7's
+remaining items — cross-device/cross-lighting testing, and confirming the
+GPU→CPU delegate fallback (§4c) actually works on a device that lacks WebGL,
+not just in the `try`/`catch` logic.

@@ -83,25 +83,42 @@ User tested in a real browser and reported it working but not smooth enough. Two
 
 **Manually verify before moving on:** run `npm run dev` and try all three exercises — confirm reps count, a spoken number is heard on each rep, deliberately breaking form (e.g. flaring the elbow on a curl, caving the knees on a squat) shows the banner and triggers a spoken cue once (not repeatedly while held), and the angle readout updates smoothly without visibly janking the video. (Not yet done in this session — no browser available here.)
 
-## Phase 5 — Gemini Coaching Layer ⬜
+## Phase 5 — Gemini Coaching Layer ✅ (done 2026-09-14)
 
-- ⬜ `lib/ai/geminiClient.ts`, `buildSummaryPrompt.ts`, `buildPlanPrompt.ts`
-- ⬜ `app/api/feedback/route.ts`, `app/api/plan/route.ts`
-- ⬜ `components/summary/SessionSummaryModal.tsx` (+ optional read-aloud), `SuggestedWorkoutCard.tsx`
-- ⬜ Offline/failure fallback text for both AI routes
-- ⬜ `GEMINI_API_KEY` documented + required in `.env.local`
+- ✅ `lib/ai/geminiClient.ts` — **Vertex AI**, not the plain Gemini Developer API `plan.md` §9 assumed (see deviation note below). Lazily creates a cached `GenerativeModel`, auth'd via a GCP service account key; `extractResponseText()` manually pulls text out of the response (this SDK has no `.text()` convenience helper)
+- ✅ `lib/ai/buildSummaryPrompt.ts`, `buildPlanPrompt.ts` — prompts adapted from `plan.md` §9a/§9b; `buildPlanPrompt` explicitly branches on empty history (see Phase 6 note below) rather than letting Gemini guess from `[]`
+- ✅ `app/api/feedback/route.ts`, `app/api/plan/route.ts` — call Gemini, `try/catch` to a rule-based fallback string on any failure (network, auth, empty response), same shape either way (`{ feedback }` / `{ plan }`, plus `fallback: true` when it's the fallback)
+- ✅ `components/summary/SessionSummaryModal.tsx` — opens on "End session", fetches `/api/feedback`, loading state, "Play" button (reads the summary aloud via `speak()`, bypassing its debounce since it's a fresh deliberate click)
+- ✅ `components/summary/SuggestedWorkoutCard.tsx` — on the landing page, fetches `/api/plan`
+- ✅ Offline/failure fallback text implemented for both routes (server-side `try/catch`) *and* client-side (`SessionSummaryModal`/`SuggestedWorkoutCard` also catch fetch failures and show a hardcoded fallback) — double-covered per `plan.md` §9's "never feels broken without connectivity"
+- ✅ "End session" button + flow added to `WorkoutSession.tsx`: speaks "Set complete, N reps" (the one voice cue deferred from Phase 4), collects `SessionStats` (reps, duration via new `sessionStartedAt` store field, form-violation counts via new `recordViolation`/`violationCounts` store fields), shows the modal; closing it resets the FSM/feedback engine/store and restarts the timer so another set can start without leaving the page
+- ✅ Verified: `npx next typegen`, `tsc --noEmit`, `eslint .`, `npx vitest run` (29/29 passing), `next build` all clean
+
+**Deviation from plan — Vertex AI, not the Gemini Developer API:** the credential the user provided (`secrets.json`) is a GCP **service account key** (`private_key`, `client_email`, `type: "service_account"`), not a plain API key string. A service account key is Vertex AI's auth mechanism; the Gemini Developer API `plan.md` §9 assumed uses a simple `GEMINI_API_KEY` string with the `@google/generative-ai` SDK instead. Implemented against `@google-cloud/vertexai` to match the credential actually given. Full explanation in `TECHNICAL_DETAILS.md` §16.
+
+**Security note:** `secrets.json` was immediately added to `.gitignore` (it wasn't ignored by the existing `.env*` pattern) before any other Phase 5 work — confirmed untracked and ignored via `git check-ignore` before proceeding. `secrets.example.json` (committed, no real values) documents the expected shape.
+
+**No persisted history yet:** `SuggestedWorkoutCard` always sends an empty history array to `/api/plan` — there's no `lib/storage/history.ts` yet (that's Phase 6), so Gemini always takes the "first-ever session" branch in `buildPlanPrompt.ts`. Revisit once Phase 6 adds real persisted `SessionRecord`s.
+
+**Also done, pulled forward from Phase 7 (user asked to deploy early):**
+- ✅ `render.yaml` — Render Blueprint (Node runtime, `npm install && npm run build` / `npm start`)
+- ✅ `lib/ai/geminiClient.ts` reads the credentials path from `GOOGLE_APPLICATION_CREDENTIALS` (falling back to `./secrets.json` for local dev) so it works with Render's Secret Files feature, which mounts at a fixed `/etc/secrets/<filename>` path, not the repo root
+- ✅ `DEPLOY.md` — step-by-step Render deployment guide, including the Secret File upload (can't be done from this session — needs the user's Render dashboard) and a note on what GCP-side setup (Vertex AI API enabled, IAM role) can't be verified from here
+
+**Manually verify before moving on:** run `npm run dev`, complete a set on any exercise, click "End session", and confirm the modal shows an actual AI-generated summary (not the fallback) — same for the landing page's "Suggested for today" card. If either shows fallback text, check the terminal for the `console.error` from the route handler (likely a GCP-side auth/permissions issue, not a code issue — see `DEPLOY.md` §4). Not yet done in this session — no browser, and no way to make a live network call to Vertex AI from here to confirm the credential actually works end-to-end.
 
 ## Phase 6 — UI Polish + History ⬜
 
 - ⬜ `lib/storage/history.ts` — localStorage/IndexedDB read-write, `SessionRecord`
 - ⬜ `app/history/page.tsx` — past sessions, stats, charts (`recharts`)
+- ⬜ Once history exists: update `SuggestedWorkoutCard.tsx` to read real history and pass it to `/api/plan` instead of always sending `[]` (Phase 5 note above); `SessionSummaryModal`'s `aiSummary` should also get persisted onto its `SessionRecord`
 - ⬜ Revisit shadcn/ui decision from Phase 1 if needed
 
-## Phase 7 — Optimization + Testing + Deploy ⬜
+## Phase 7 — Optimization + Testing + Deploy ✅ deploy pulled into Phase 5 (2026-09-14), rest ⬜
 
-- ⬜ Performance pass (downscale model input, confirm GPU delegate + CPU fallback)
+- ⬜ Performance pass (downscale model input, confirm GPU delegate + CPU fallback) — downscale already done in the post-Phase-3 smoothness pass; GPU/CPU fallback already implemented in Phase 2, not yet stress-tested on a device that actually lacks WebGL
 - ⬜ Cross-device / cross-lighting testing per plan §11
-- ⬜ Vercel deploy with `GEMINI_API_KEY` env var
+- ✅ Render deploy (`render.yaml`, `DEPLOY.md`) — done ahead of schedule at the user's request; Vercel was `plan.md`'s original target but Render is what was asked for
 
 ## Phase 8 (optional) — Accounts & Sync ⬜
 

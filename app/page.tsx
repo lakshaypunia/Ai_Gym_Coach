@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SuggestedWorkoutCard } from "@/components/summary/SuggestedWorkoutCard";
 
 export default function Home() {
   return (
@@ -17,6 +18,7 @@ export default function Home() {
         >
           Start a workout
         </Link>
+        <SuggestedWorkoutCard />
       </main>
     </div>
   );

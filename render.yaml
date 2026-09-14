@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ai-gym-coach
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.43
+      - key: GEMINI_LOCATION
+        value: us-central1
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/secrets.json

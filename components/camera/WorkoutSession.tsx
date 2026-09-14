@@ -7,6 +7,7 @@ import { PoseCanvas } from "@/components/camera/PoseCanvas";
 import { RepCounter } from "@/components/hud/RepCounter";
 import { FormFeedbackBanner } from "@/components/hud/FormFeedbackBanner";
 import { AngleReadout } from "@/components/hud/AngleReadout";
+import { SessionSummaryModal } from "@/components/summary/SessionSummaryModal";
 import { useSessionStore } from "@/lib/store/sessionStore";
 import { angleForJoint, isJointVisible } from "@/lib/geometry/angles";
 import { getExerciseConfig } from "@/lib/exercises/configs";
@@ -15,6 +16,7 @@ import { FeedbackEngine } from "@/lib/exercises/feedback";
 import { speak } from "@/lib/audio/speak";
 import type { ExerciseSummary } from "@/lib/exercises/list";
 import type { FormRule } from "@/lib/exercises/types";
+import type { SessionStats } from "@/lib/ai/types";
 import type { PoseFrame } from "@/types/pose";
 
 const ANGLE_READOUT_THROTTLE_MS = 150;
@@ -35,6 +37,8 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
   const setCameraError = useSessionStore((state) => state.setCameraError);
   const setExerciseId = useSessionStore((state) => state.setExerciseId);
   const incrementRep = useSessionStore((state) => state.incrementRep);
+  const markSessionStarted = useSessionStore((state) => state.markSessionStarted);
+  const recordViolation = useSessionStore((state) => state.recordViolation);
   const reset = useSessionStore((state) => state.reset);
 
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -44,6 +48,7 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
   const [poseError, setPoseError] = useState<string | null>(null);
   const [bannerRule, setBannerRule] = useState<FormRule | null>(null);
   const [primaryAngle, setPrimaryAngle] = useState<number | null>(null);
+  const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
 
   const exerciseConfig = getExerciseConfig(exercise.id);
   const fsmRef = useRef<RepCounterFsm | null>(null);
@@ -83,9 +88,24 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
     if (feedback) {
       setBannerRule(pickBannerRule(feedback.active));
       for (const rule of feedback.newlyViolated) {
+        recordViolation(rule.id, rule.message);
         speak(rule.message);
       }
     }
+  }
+
+  function handleEndSession() {
+    const state = useSessionStore.getState();
+    const durationSec = state.sessionStartedAt ? (Date.now() - state.sessionStartedAt) / 1000 : 0;
+
+    speak(`Set complete, ${state.repCount} reps`, { minGapMs: 0 });
+    setSessionStats({
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      totalReps: state.repCount,
+      durationSec,
+      formViolations: Object.values(state.violationCounts),
+    });
   }
 
   const cameraReady = status === "camera-ready";
@@ -99,6 +119,16 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
           </Link>
           <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">{exercise.name}</h1>
         </div>
+
+        {cameraReady && exerciseConfig && repCount > 0 && (
+          <button
+            type="button"
+            onClick={handleEndSession}
+            className="rounded-full border border-black/10 px-4 py-2 text-sm font-medium text-black hover:bg-black/5 dark:border-white/10 dark:text-zinc-50 dark:hover:bg-white/10"
+          >
+            End session
+          </button>
+        )}
       </div>
 
       <div className="relative aspect-video w-full">
@@ -108,6 +138,7 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
             setCameraError(null);
             setStatus("camera-ready");
             setVideoEl(video);
+            markSessionStarted();
           }}
           onError={(message) => setCameraError(message)}
         />
@@ -159,6 +190,22 @@ export function WorkoutSession({ exercise }: { exercise: ExerciseSummary }) {
           Rep counting for {exercise.name} isn&apos;t wired up yet — the skeleton overlay above
           still tracks in real time.
         </p>
+      )}
+
+      {sessionStats && (
+        <SessionSummaryModal
+          stats={sessionStats}
+          onClose={() => {
+            setSessionStats(null);
+            setBannerRule(null);
+            setPrimaryAngle(null);
+            fsmRef.current?.reset();
+            feedbackEngineRef.current?.reset();
+            reset();
+            setStatus("camera-ready");
+            markSessionStarted();
+          }}
+        />
       )}
     </div>
   );
