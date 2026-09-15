@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getRecentHistory } from "@/lib/storage/history";
 
 const FALLBACK_PLAN =
   "Try a starter session: 3 sets of 10 bicep curls, focusing on keeping your elbow tucked to your torso.";
@@ -12,13 +13,10 @@ export function SuggestedWorkoutCard() {
   useEffect(() => {
     let cancelled = false;
 
-    // Always sent as an empty history for now — there's no persisted session
-    // history yet (lib/storage/history.ts lands in Phase 6), so this always
-    // gets Gemini's "first-ever session" suggestion. See buildPlanPrompt.ts.
     fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify([]),
+      body: JSON.stringify(getRecentHistory()),
     })
       .then((res) => res.json())
       .then((data: { plan: string }) => {

@@ -2,12 +2,12 @@
 
 A step-by-step explanation of how each part of the system actually works, for
 whoever needs to explain, defend, or extend this project. Written against the
-code as it exists after Phase 5 (camera → pose tracking → rep counting →
+code as it exists after Phase 6 (camera → pose tracking → rep counting →
 posture feedback → voice cues → Gemini-powered session summary and
-suggested-workout card, for all three exercises), deployed to Render.
-Cross-references `plan.md` (the original design) and `steps.md` (build
-progress) — this file explains the *how* and *why* behind what's checked off
-there.
+suggested-workout card → persisted history with a chart, for all three
+exercises), deployed to Render. Cross-references `plan.md` (the original
+design) and `steps.md` (build progress) — this file explains the *how* and
+*why* behind what's checked off there.
 
 ---
 
@@ -730,12 +730,11 @@ resets the FSM, the feedback engine, and the store, then immediately restores
 `camera-ready` status and restarts the session timer — so a second set can
 start without leaving the page or re-requesting camera permission.
 
-**`SuggestedWorkoutCard`** (landing page) always calls `/api/plan` with an
-empty history array right now — there's no persisted session history yet
-(`lib/storage/history.ts` is Phase 6), so `buildPlanPrompt()` always takes
-its explicit "first-ever session" branch. This is a real, working feature
-today; it just isn't personalized yet. Revisiting it to pass real history is
-tracked in `steps.md` under Phase 6.
+**`SuggestedWorkoutCard`** (landing page) calls `/api/plan` with
+`getRecentHistory()` (§18) — the last 5 saved sessions. On a fresh browser
+with no history yet, that's still an empty array, so `buildPlanPrompt()`
+correctly takes its "first-ever session" branch; once real sessions exist,
+Gemini sees them and can personalize the suggestion.
 
 ---
 
@@ -764,12 +763,76 @@ since deploying requires the user's own Render account and dashboard access.
 
 ---
 
-## 18. What's next (Phase 6+)
+## 18. Persisted history — `lib/storage/history.ts`, `app/history/page.tsx`
 
-Per `steps.md`: persisted session history (`lib/storage/history.ts`,
-localStorage-backed `SessionRecord`s) and an `/history` page with stats and
-charts, after which `SuggestedWorkoutCard` (§16) should get updated to pass
-real history into `/api/plan` instead of always sending `[]`. Then Phase 7's
-remaining items — cross-device/cross-lighting testing, and confirming the
-GPU→CPU delegate fallback (§4c) actually works on a device that lacks WebGL,
-not just in the `try`/`catch` logic.
+Every AI feature so far (§15-16) is one-shot — the app never remembers
+anything between sessions. This is the piece that closes that gap, entirely
+client-side (no backend database — `plan.md` §4 explicitly scoped `v1`
+persistence to `localStorage`):
+
+```ts
+export interface SessionRecord extends SessionStats {
+  id: string;
+  date: string;         // ISO timestamp
+  aiSummary?: string;   // cached, so history doesn't re-fetch it
+}
+```
+
+`saveSession()`, `getHistory()`, `getRecentHistory()`, and `clearHistory()`
+all read/write a single JSON array under one `localStorage` key, capped at 50
+records (oldest trimmed first). Every function guards on
+`typeof window === "undefined"` and no-ops rather than throwing — this
+module can safely be imported anywhere (including, harmlessly, during SSR)
+without special-casing callers, and a `localStorage` failure (quota, private
+browsing) degrades to "history just doesn't save this one" instead of
+crashing the workout flow. This mirrors the same philosophy as the
+`try`/`catch` fallbacks in §16: features that aren't load-bearing for the
+core real-time loop should never be able to break it.
+
+**Where sessions get saved.** `SessionSummaryModal` (§16) calls
+`saveSession(stats, finalSummary)` once the `/api/feedback` fetch settles —
+whether that resolved with a real Gemini summary or fell back to the
+rule-based text, the session still gets recorded either way, since both are
+useful history.
+
+**A stability bug the tests caught.** `getHistory()`'s original sort —
+`readAll().sort((a, b) => b.date.localeCompare(a.date))` — is only a correct
+"most recent first" ordering when every record's `date` is distinct.
+`Array.prototype.sort` is **stable**, so two records tied on `date` (two
+sessions saved within the same millisecond — exactly what
+`history.test.ts`'s loop-based tests do, calling `saveSession()` repeatedly
+with no delay) keep their original relative order, i.e. oldest-of-the-tied-
+group-first, not newest-first. Fixed by reversing the array before sorting —
+for a stable sort, reversing first means ties resolve to
+most-recently-**pushed**-first instead of falling back to array-insertion
+order. Not a scenario that comes up in real use (actual sessions are minutes
+apart), but the kind of thing that's much cheaper to catch in a test than to
+debug later from "my history looks slightly out of order sometimes."
+
+**`app/history/page.tsx`** is a client component (it has to be — reading
+`localStorage` needs a browser) that renders a `recharts` bar chart of reps
+per session plus a list of past sessions with their cached `aiSummary`. It
+uses the same `null`-sentinel pattern as §5's `PoseCanvas` status handling in
+spirit, but here for a different reason: **hydration safety**. `useState<SessionRecord[] | null>(null)`
+means the very first render — both the server's (where `localStorage` simply
+doesn't exist) and the client's initial hydration pass — shows a "Loading…"
+state; only *after* mount does a `useEffect` read the real data and update
+state. If the component instead tried to read `localStorage` directly during
+render (e.g. via a lazy `useState(() => getHistory())` initializer), the
+server-rendered HTML (necessarily empty, since `localStorage` doesn't exist
+server-side) and the client's actual first paint (real data, if any exists)
+would disagree — a hydration mismatch. The chart's colors are wired to the
+same CSS custom properties as the rest of the UI (`fill="var(--accent)"`,
+etc.) rather than hardcoded hex, so it follows the light/dark theme
+automatically instead of needing its own color logic.
+
+---
+
+## 19. What's next (Phase 7+)
+
+Per `steps.md`, what's left: cross-device/cross-lighting testing, and
+confirming the GPU→CPU delegate fallback (§4c) actually works on a device
+that lacks WebGL, not just in the `try`/`catch` logic. Also worth revisiting
+the `shadcn/ui` decision from §14 if the UI ever needs a primitive (modal,
+dropdown) more complex than what hand-written Tailwind comfortably covers —
+nothing has needed it yet.

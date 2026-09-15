@@ -107,15 +107,22 @@ User tested in a real browser and reported it working but not smooth enough. Two
 
 **Manually verify before moving on:** run `npm run dev`, complete a set on any exercise, click "End session", and confirm the modal shows an actual AI-generated summary (not the fallback) — same for the landing page's "Suggested for today" card. If either shows fallback text, check the terminal for the `console.error` from the route handler (likely a GCP-side auth/permissions issue, not a code issue — see `DEPLOY.md` §4). Not yet done in this session — no browser, and no way to make a live network call to Vertex AI from here to confirm the credential actually works end-to-end.
 
-## Phase 6 — UI Polish + History 🚧 (visual polish done 2026-09-14, history not started)
+## Phase 6 — UI Polish + History ✅ (done 2026-09-15)
 
 - ✅ Visual design pass, pulled forward at the user's request ("make it look good" before continuing): design tokens (`app/globals.css` — `--accent`/`--accent-soft`/`--surface`/`--border`/`--muted`, emerald accent, dark-mode variants), a sticky `Header` (`components/layout/Header.tsx`) added to `app/layout.tsx` for consistent chrome across every page, landing-page hero rewrite (gradient heading, feature row, badge), exercise picker cards with per-exercise icons (`lib/exercises/list.ts` gained an `icon` field), restyled HUD pills (`RepCounter`, `AngleReadout`, `FormFeedbackBanner` — glass/backdrop-blur look), a "Live" pulse badge + icon on the workout session header, restyled `SessionSummaryModal` (stat chips for reps/duration/form-flags, entrance animation via new `.animate-modal-pop`/`.animate-backdrop-fade` keyframes in `globals.css`), and a skeleton-loading shimmer on `SuggestedWorkoutCard`. Also fixed a pre-existing bug: `globals.css` set `font-family: Arial` directly on `body`, which was silently overriding the Geist font entirely — removed, `font-sans` now applied properly via `app/layout.tsx`.
-- ✅ Verified: `npx next typegen`, `tsc --noEmit`, `eslint .`, `npx vitest run` (29/29 passing), `next build`, and a dev-server route smoke test (`/`, `/workout`, `/workout/squat` all 200, no error markers in the rendered HTML) all clean.
-- **Not visually verified in an actual browser** — no display available in this session. The usual caveat applies, more so than previous phases since this is a pure-visual change: please actually look at it and tell me what to adjust (spacing, the accent color choice, anything that reads wrong) rather than assuming it's right.
-- ⬜ `lib/storage/history.ts` — localStorage/IndexedDB read-write, `SessionRecord`
-- ⬜ `app/history/page.tsx` — past sessions, stats, charts (`recharts`)
-- ⬜ Once history exists: update `SuggestedWorkoutCard.tsx` to read real history and pass it to `/api/plan` instead of always sending `[]` (Phase 5 note above); `SessionSummaryModal`'s `aiSummary` should also get persisted onto its `SessionRecord`
-- ⬜ Revisit shadcn/ui decision from Phase 1 if needed
+- ✅ `lib/storage/history.ts` — `SessionRecord` (extends `SessionStats` from Phase 5 with `id`/`date`/`aiSummary`), localStorage-backed `getHistory()`/`getRecentHistory()`/`saveSession()`/`clearHistory()`. All read/write functions no-op safely (never throw) when `window` is unavailable (SSR, or storage disabled) — history is best-effort and must never block the workout flow.
+- ✅ `app/history/page.tsx` — a recharts bar chart of reps per session, plus a list of past sessions (exercise, reps, duration, form-flag count, cached AI summary), a "Clear" button, and an empty state. Client-only (reads localStorage), uses a `null` initial-state sentinel so the server-rendered and first client-rendered HTML agree (both show "Loading…") before the real data swaps in after mount — avoids a hydration mismatch.
+- ✅ `SessionSummaryModal.tsx` now calls `saveSession()` once the summary (AI-generated or fallback) resolves — every completed session gets persisted, regardless of which text it ended up with.
+- ✅ `SuggestedWorkoutCard.tsx` now sends `getRecentHistory()` instead of always `[]` — the "first-ever session" branch in `buildPlanPrompt.ts` (Phase 5) now only triggers on an actually-empty history, and later sessions get real personalized suggestions.
+- ✅ Installed `recharts` (bar chart on the history page, per `plan.md` §4's file tree).
+- ✅ Unit tests: `lib/storage/history.test.ts` (6 tests, using a real in-memory `Storage` stub via `vi.stubGlobal` rather than jsdom) — caught a real bug (see below).
+- ✅ Verified: `npx next typegen`, `tsc --noEmit`, `eslint .`, `npx vitest run` (35/35 passing), `next build`, and a dev-server route smoke test (`/`, `/history` both 200) all clean.
+
+**Bug caught by the history tests:** `getHistory()`'s sort (`b.date.localeCompare(a.date)`) is only a reliable "most recent first" ordering when every session has a distinct `date` string. Two sessions saved within the same millisecond (which the test suite does on purpose, calling `saveSession()` in a tight loop) tie on the sort key, and `Array.prototype.sort` is stable — ties fall back to insertion (oldest-first) order, not newest-first. Fixed by reversing the array before the sort, so ties resolve to most-recently-saved-first instead. Unlikely in real usage (actual sessions are minutes apart), but worth having fixed before it shipped.
+
+**Not visually verified in an actual browser** — no display available in this session, for both the visual design pass and the new history page/chart. Please look at it and report back what needs adjusting.
+
+- ⬜ Revisit shadcn/ui decision from Phase 1 if needed (no complex primitive — modal, dropdown, etc. — has needed it yet; still using hand-written Tailwind)
 
 ## Phase 7 — Optimization + Testing + Deploy ✅ deploy pulled into Phase 5 (2026-09-14), rest ⬜
 

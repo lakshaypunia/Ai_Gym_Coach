@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { speak } from "@/lib/audio/speak";
+import { saveSession } from "@/lib/storage/history";
 import type { SessionStats } from "@/lib/ai/types";
 
 interface SessionSummaryModalProps {
@@ -24,11 +25,17 @@ export function SessionSummaryModal({ stats, onClose }: SessionSummaryModalProps
       .then((res) => res.json())
       .then((data: { feedback: string }) => {
         if (!cancelled) setSummary(data.feedback);
+        return data.feedback;
       })
       .catch(() => {
-        if (!cancelled) {
-          setSummary(`Nice work — ${stats.totalReps} reps of ${stats.exerciseName}.`);
-        }
+        const fallback = `Nice work — ${stats.totalReps} reps of ${stats.exerciseName}.`;
+        if (!cancelled) setSummary(fallback);
+        return fallback;
+      })
+      .then((finalSummary: string) => {
+        // Persisted regardless of whether it was AI-generated or the
+        // fallback text — the record is still useful history either way.
+        saveSession(stats, finalSummary);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
