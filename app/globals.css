@@ -9,6 +9,7 @@
   --accent: #059669;
   --accent-soft: #ecfdf5;
   --accent-foreground: #ffffff;
+  --glow: rgba(5, 150, 105, 0.16);
 }
 
 @theme inline {
@@ -24,22 +25,51 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Default to the OS/browser preference... */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0b;
-    --foreground: #f4f4f5;
-    --surface: #17171a;
-    --border: rgba(244, 244, 245, 0.09);
-    --muted: #9ca3af;
+  :root:not([data-theme="light"]) {
+    --background: #0d1117;
+    --foreground: #f2f4f7;
+    --surface: #161b22;
+    --border: rgba(242, 244, 247, 0.09);
+    --muted: #9aa4b2;
     --accent: #34d399;
-    --accent-soft: rgba(52, 211, 153, 0.12);
+    --accent-soft: rgba(52, 211, 153, 0.14);
     --accent-foreground: #052e1e;
+    --glow: rgba(52, 211, 153, 0.14);
   }
+}
+
+/* ...but let a manual toggle (ThemeToggle) override it either direction. */
+:root[data-theme="dark"] {
+  --background: #0d1117;
+  --foreground: #f2f4f7;
+  --surface: #161b22;
+  --border: rgba(242, 244, 247, 0.09);
+  --muted: #9aa4b2;
+  --accent: #34d399;
+  --accent-soft: rgba(52, 211, 153, 0.14);
+  --accent-foreground: #052e1e;
+  --glow: rgba(52, 211, 153, 0.14);
+}
+
+:root[data-theme="light"] {
+  --background: #fafafa;
+  --foreground: #111113;
+  --surface: #ffffff;
+  --border: rgba(17, 17, 19, 0.08);
+  --muted: #6b7280;
+  --accent: #059669;
+  --accent-soft: #ecfdf5;
+  --accent-foreground: #ffffff;
+  --glow: rgba(5, 150, 105, 0.16);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+  background-image: radial-gradient(60rem 30rem at 50% -10%, var(--glow), transparent 70%);
+  background-repeat: no-repeat;
 }
 
 ::selection {

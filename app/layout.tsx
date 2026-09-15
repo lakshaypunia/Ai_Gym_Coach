@@ -25,6 +25,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col font-sans">
+        {/* Blocking (no async/defer) and the first thing in <body>, so it
+            applies a previously-chosen theme before anything paints —
+            avoids a flash of the wrong theme on load. Static string, no
+            user input, so this is safe from injection. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var t=localStorage.getItem('theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}",
+          }}
+        />
         <Header />
         {children}
       </body>

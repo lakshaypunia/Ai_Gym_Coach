@@ -124,6 +124,17 @@ User tested in a real browser and reported it working but not smooth enough. Two
 
 - ⬜ Revisit shadcn/ui decision from Phase 1 if needed (no complex primitive — modal, dropdown, etc. — has needed it yet; still using hand-written Tailwind)
 
+### Theme toggle + richer dark palette (2026-09-15)
+
+User reported the background looked flat/plain black. Not a bug — the dark-mode CSS was only ever driven by `prefers-color-scheme: dark`, so anyone with a dark OS/browser setting had no way to see the (already-built) light theme without changing their OS setting.
+
+- ✅ `components/layout/ThemeToggle.tsx` — sun/moon button in the header, persists choice to `localStorage`, sets `data-theme="light"|"dark"` on `<html>`
+- ✅ `app/globals.css` — added explicit `:root[data-theme="dark"]`/`:root[data-theme="light"]` overrides (the media-query block now excludes `[data-theme="light"]` via `:root:not(...)` so a manual toggle wins over the OS setting in both directions); also enriched the dark palette (near-black `#0a0a0b` → a softer `#0d1117`/`#161b22` slate, closer to what a "not flat" dark UI usually uses) and added a very subtle radial accent-color glow behind the page background (`--glow` token) in both themes, for a bit of depth instead of a flat solid fill
+- ✅ `app/layout.tsx` — added a small blocking inline script as the first element in `<body>` that applies a stored theme choice before paint, avoiding a flash of the wrong theme on load (static string, no user input — safe)
+- ✅ Verified: `tsc --noEmit`, `eslint .`, `npx vitest run` (35/35 passing), `next build`, dev-server smoke test all clean
+
+**Still not visually verified** — same caveat as the rest of Phase 6's visual work. Please check that the toggle actually works and that both themes look right.
+
 ## Phase 7 — Optimization + Testing + Deploy ✅ deploy pulled into Phase 5 (2026-09-14), rest ⬜
 
 - ⬜ Performance pass (downscale model input, confirm GPU delegate + CPU fallback) — downscale already done in the post-Phase-3 smoothness pass; GPU/CPU fallback already implemented in Phase 2, not yet stress-tested on a device that actually lacks WebGL

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 
 export function Header() {
   return (
@@ -27,6 +28,7 @@ export function Header() {
           >
             History
           </Link>
+          <ThemeToggle />
         </nav>
       </div>
     </header>
